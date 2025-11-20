@@ -17,6 +17,12 @@ export enum TileType {
   FRUIT = 7
 }
 
+export enum Difficulty {
+  EASY = 'EASY',
+  MEDIUM = 'MEDIUM',
+  HARD = 'HARD'
+}
+
 export interface Position {
   x: number;
   y: number;
@@ -42,4 +48,5 @@ export interface GameState {
   powerModeTime: number;
   dotsEaten: number;
   fruitTimer: number;
+  difficulty: Difficulty;
 }

@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
-import { Direction, GameState, Entity, TileType, Position } from './types';
+import { Direction, GameState, Entity, TileType, Position, Difficulty } from './types';
 import { INITIAL_MAP, GHOST_COLORS, FRUIT_SPAWN_POS, FRUIT_POINTS, FRUIT_DURATION, DOTS_TO_SPAWN_FRUIT, SPEED_MS } from './constants';
 import Grid from './components/Grid';
 import { soundManager } from './utils/audio';
@@ -35,7 +35,7 @@ const App: React.FC = () => {
   const stateRef = useRef<GameState | null>(null);
 
   // Initialize Game
-  const initGame = useCallback(() => {
+  const initGame = useCallback((difficulty: Difficulty = Difficulty.MEDIUM) => {
     const pacmanStart = findPosition(INITIAL_MAP, TileType.PACMAN_SPAWN);
     const ghostStarts = findAllPositions(INITIAL_MAP, TileType.GHOST_SPAWN);
 
@@ -68,7 +68,8 @@ const App: React.FC = () => {
       status: 'IDLE',
       powerModeTime: 0,
       dotsEaten: 0,
-      fruitTimer: 0
+      fruitTimer: 0,
+      difficulty
     };
 
     setGameState(initialState);
@@ -221,7 +222,7 @@ const App: React.FC = () => {
     // 3. Move Ghosts
     current.ghosts = current.ghosts.map(ghost => {
         if (ghost.isDead) {
-             // Simple respawn logic for now: teleport to center
+             // Simple respawn logic: teleport to center
              const center = findPosition(INITIAL_MAP, TileType.GHOST_SPAWN);
              if (center && ghost.x === center.x && ghost.y === center.y) {
                  return { ...ghost, isDead: false, isScared: false };
@@ -230,7 +231,6 @@ const App: React.FC = () => {
              if (center) {
                  const dx = center.x - ghost.x;
                  const dy = center.y - ghost.y;
-                 // Very basic homing
                  if (Math.abs(dx) > Math.abs(dy)) {
                     ghost.nextDirection = dx > 0 ? Direction.RIGHT : Direction.LEFT;
                  } else {
@@ -239,7 +239,6 @@ const App: React.FC = () => {
              }
         } else {
             // Normal movement
-            // Randomly choose a valid direction that isn't reversing if possible
             const options = [Direction.UP, Direction.DOWN, Direction.LEFT, Direction.RIGHT];
             const validOptions = options.filter(dir => {
                  const p = getNextPosition(ghost.x, ghost.y, dir);
@@ -254,15 +253,41 @@ const App: React.FC = () => {
             });
 
             if (validOptions.length > 0) {
-                // Simple AI: 20% chance to change direction at intersection, otherwise keep straight
-                const goStraight = validOptions.includes(ghost.direction);
-                if (goStraight && Math.random() > 0.3) {
-                    ghost.nextDirection = ghost.direction;
+                // AI Behavior based on Difficulty
+                const difficulty = current.difficulty;
+                let chaseProbability = 0.1; // EASY default
+                if (difficulty === Difficulty.MEDIUM) chaseProbability = 0.4;
+                if (difficulty === Difficulty.HARD) chaseProbability = 0.8;
+
+                // If scared, move randomly (or away, but simplified to random)
+                const shouldChase = !ghost.isScared && !ghost.isDead && Math.random() < chaseProbability;
+
+                if (shouldChase) {
+                    // Target Pacman: Find move with min distance
+                    let bestDir = validOptions[0];
+                    let minDist = Infinity;
+
+                    validOptions.forEach(dir => {
+                        const pos = getNextPosition(ghost.x, ghost.y, dir);
+                        const distSq = Math.pow(pos.x - current.pacman.x, 2) + Math.pow(pos.y - current.pacman.y, 2);
+                        if (distSq < minDist) {
+                            minDist = distSq;
+                            bestDir = dir;
+                        }
+                    });
+                    ghost.nextDirection = bestDir;
                 } else {
-                    ghost.nextDirection = validOptions[Math.floor(Math.random() * validOptions.length)];
+                     // Random / Wandering Behavior
+                     // Prefer going straight to avoid jittering
+                    const goStraight = validOptions.includes(ghost.direction);
+                    if (goStraight && Math.random() > 0.4) {
+                        ghost.nextDirection = ghost.direction;
+                    } else {
+                        ghost.nextDirection = validOptions[Math.floor(Math.random() * validOptions.length)];
+                    }
                 }
             } else {
-                 // Dead end (shouldn't happen in this map)
+                 // Dead end logic
                  ghost.nextDirection = [Direction.UP, Direction.DOWN, Direction.LEFT, Direction.RIGHT].find(d => d !== ghost.direction) || Direction.UP;
             }
         }
@@ -312,6 +337,8 @@ const App: React.FC = () => {
                     g.x = s.x;
                     g.y = s.y;
                     g.isScared = false;
+                    // Fix: Ensure dead ghosts are revived on level reset
+                    g.isDead = false; 
                 });
             }
         }
@@ -342,12 +369,23 @@ const App: React.FC = () => {
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
     if (!stateRef.current) return;
     
+    // Start game on Enter/Space if not playing (defaults to Medium if used at IDLE)
     if (stateRef.current.status === 'IDLE' || stateRef.current.status === 'GAME_OVER' || stateRef.current.status === 'WON') {
         if (e.key === 'Enter' || e.key === ' ') {
-             initGame();
-             soundManager.init();
-             stateRef.current = { ...stateRef.current!, status: 'PLAYING' };
-             setGameState(prev => prev ? { ...prev, status: 'PLAYING' } : null);
+             if (stateRef.current.status === 'IDLE') {
+                 // Default to Medium if using keyboard shortcut
+                 initGame(Difficulty.MEDIUM);
+                 soundManager.init();
+                 stateRef.current = { ...stateRef.current!, status: 'PLAYING', difficulty: Difficulty.MEDIUM };
+                 setGameState(prev => prev ? { ...prev, status: 'PLAYING', difficulty: Difficulty.MEDIUM } : null);
+             } else {
+                 // Restart with previous difficulty
+                 const prevDiff = stateRef.current.difficulty;
+                 initGame(prevDiff);
+                 soundManager.init();
+                 stateRef.current = { ...stateRef.current!, status: 'PLAYING', difficulty: prevDiff };
+                 setGameState(prev => prev ? { ...prev, status: 'PLAYING', difficulty: prevDiff } : null);
+             }
         }
         return;
     }
@@ -379,18 +417,27 @@ const App: React.FC = () => {
       }
   };
   
-  const toggleGame = () => {
+  const startGame = (difficulty: Difficulty) => {
       soundManager.init();
-      if (stateRef.current?.status === 'IDLE' || stateRef.current?.status === 'GAME_OVER' || stateRef.current?.status === 'WON') {
-        initGame();
-        stateRef.current!.status = 'PLAYING';
-        setGameState({ ...stateRef.current! });
+      initGame(difficulty);
+      stateRef.current = { ...stateRef.current!, status: 'PLAYING', difficulty };
+      setGameState(prev => prev ? { ...prev, status: 'PLAYING', difficulty } : null);
+  };
+  
+  const restartGame = () => {
+      if (stateRef.current) {
+          startGame(stateRef.current.difficulty);
       }
   };
 
   const toggleMute = () => {
       const muted = soundManager.toggleMute();
       setIsMuted(muted);
+  };
+  
+  const backToMenu = () => {
+      setGameState(prev => prev ? { ...prev, status: 'IDLE' } : null);
+      if (stateRef.current) stateRef.current.status = 'IDLE';
   };
 
   if (!gameState) return <div className="min-h-screen bg-slate-900 text-white flex items-center justify-center">Loading...</div>;
@@ -403,7 +450,8 @@ const App: React.FC = () => {
         <div>
             <h1 className="text-2xl text-yellow-400 drop-shadow-md mb-2">PAC-MAN</h1>
             <div className="flex items-center gap-4">
-                <div className="text-sm text-slate-400">HIGH SCORE: <span className="text-white">{highScore}</span></div>
+                <div className="text-xs text-slate-400">HIGH: <span className="text-white">{highScore}</span></div>
+                {gameState.status !== 'IDLE' && <div className="text-xs text-slate-400 hidden sm:block">{gameState.difficulty}</div>}
             </div>
         </div>
         <div className="text-right">
@@ -427,32 +475,57 @@ const App: React.FC = () => {
         
         {/* Overlay Messages */}
         {gameState.status !== 'PLAYING' && (
-            <div className="absolute inset-0 bg-black/70 backdrop-blur-sm flex flex-col items-center justify-center z-20 rounded-lg">
+            <div className="absolute inset-0 bg-black/80 backdrop-blur-sm flex flex-col items-center justify-center z-20 rounded-lg">
                 {gameState.status === 'IDLE' && (
                     <>
-                        <div className="text-yellow-400 text-4xl mb-8 animate-bounce">READY!</div>
-                        <button 
-                            onClick={toggleGame}
-                            className="px-8 py-4 bg-blue-600 hover:bg-blue-500 text-white rounded-sm border-b-4 border-blue-800 active:border-b-0 active:translate-y-1 transition-all"
-                        >
-                            START GAME
-                        </button>
+                        <div className="text-yellow-400 text-3xl mb-6 animate-bounce text-center">PAC-MAN</div>
+                        <div className="text-white text-sm mb-4">SELECT DIFFICULTY</div>
+                        <div className="flex flex-col gap-3 w-full max-w-xs px-8">
+                            <button 
+                                onClick={() => startGame(Difficulty.EASY)}
+                                className="w-full py-3 bg-green-600 hover:bg-green-500 text-white rounded-sm border-b-4 border-green-800 active:border-b-0 active:translate-y-1 transition-all flex justify-between px-4 group"
+                            >
+                                <span>EASY</span>
+                                <span className="opacity-0 group-hover:opacity-100 transition-opacity">👻</span>
+                            </button>
+                            <button 
+                                onClick={() => startGame(Difficulty.MEDIUM)}
+                                className="w-full py-3 bg-yellow-600 hover:bg-yellow-500 text-white rounded-sm border-b-4 border-yellow-800 active:border-b-0 active:translate-y-1 transition-all flex justify-between px-4 group"
+                            >
+                                <span>MEDIUM</span>
+                                <span className="opacity-0 group-hover:opacity-100 transition-opacity">👻👻</span>
+                            </button>
+                            <button 
+                                onClick={() => startGame(Difficulty.HARD)}
+                                className="w-full py-3 bg-red-600 hover:bg-red-500 text-white rounded-sm border-b-4 border-red-800 active:border-b-0 active:translate-y-1 transition-all flex justify-between px-4 group"
+                            >
+                                <span>HARD</span>
+                                <span className="opacity-0 group-hover:opacity-100 transition-opacity">💀</span>
+                            </button>
+                        </div>
                     </>
                 )}
                 {gameState.status === 'GAME_OVER' && (
                     <>
                         <div className="text-red-500 text-4xl mb-4">GAME OVER</div>
                         <div className="text-white mb-2">SCORE: {gameState.score}</div>
+                        <div className="text-slate-400 text-xs mb-6">DIFFICULTY: {gameState.difficulty}</div>
+                        
                         {gameState.score >= highScore && gameState.score > 0 && (
                              <div className="text-yellow-400 mb-6 text-sm animate-pulse">NEW HIGH SCORE!</div>
                         )}
-                        {!((gameState.score >= highScore) && gameState.score > 0) && <div className="mb-8"></div>}
                         
                         <button 
-                            onClick={toggleGame}
-                            className="px-6 py-3 bg-white text-red-600 hover:bg-gray-200 rounded-sm flex items-center gap-2"
+                            onClick={restartGame}
+                            className="px-6 py-3 bg-white text-red-600 hover:bg-gray-200 rounded-sm flex items-center gap-2 mb-4 w-48 justify-center"
                         >
                             <ArrowPathIcon className="w-5 h-5" /> RESTART
+                        </button>
+                        <button
+                            onClick={backToMenu}
+                            className="text-slate-400 hover:text-white text-sm underline"
+                        >
+                            MAIN MENU
                         </button>
                     </>
                 )}
@@ -460,16 +533,23 @@ const App: React.FC = () => {
                     <>
                         <div className="text-green-400 text-4xl mb-4">YOU WIN!</div>
                         <div className="text-white mb-2">SCORE: {gameState.score}</div>
+                        <div className="text-slate-400 text-xs mb-6">DIFFICULTY: {gameState.difficulty}</div>
+
                          {gameState.score >= highScore && gameState.score > 0 && (
                              <div className="text-yellow-400 mb-6 text-sm animate-pulse">NEW HIGH SCORE!</div>
                         )}
-                         {!((gameState.score >= highScore) && gameState.score > 0) && <div className="mb-8"></div>}
 
                         <button 
-                            onClick={toggleGame}
-                            className="px-6 py-3 bg-green-600 text-white hover:bg-green-500 rounded-sm"
+                            onClick={restartGame}
+                            className="px-6 py-3 bg-green-600 text-white hover:bg-green-500 rounded-sm w-48 mb-4"
                         >
                             PLAY AGAIN
+                        </button>
+                        <button
+                            onClick={backToMenu}
+                            className="text-slate-400 hover:text-white text-sm underline"
+                        >
+                            MAIN MENU
                         </button>
                     </>
                 )}
@@ -496,7 +576,7 @@ const App: React.FC = () => {
             </button>
             <button 
                 className="bg-slate-800 rounded-full flex items-center justify-center active:bg-slate-700 shadow-lg border-b-4 border-slate-900 active:border-b-0 active:translate-y-1"
-                onClick={toggleGame}
+                onClick={restartGame} // Use restart for center button on mobile
             >
                 <div className="w-4 h-4 bg-red-500 rounded-full"></div>
             </button>
