@@ -24,6 +24,11 @@ export const INITIAL_MAP = [
   [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
 ];
 
-export const SPEED_MS = 200;
+export const SPEED_MS = 120; // Faster tick rate for better responsiveness
 export const GHOST_COLORS = ['#ff0000', '#ffb8ff', '#00ffff', '#ffb852'];
-export const CELL_SIZE = 20; // Base size for calculations, responsiveness handled by CSS grid
+export const CELL_SIZE = 20; 
+
+export const FRUIT_SPAWN_POS = { x: 9, y: 12 };
+export const FRUIT_POINTS = 500;
+export const FRUIT_DURATION = 70; 
+export const DOTS_TO_SPAWN_FRUIT = 50;

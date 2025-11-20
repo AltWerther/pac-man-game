@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { Direction, GameState, Entity, TileType, Position } from './types';
-import { INITIAL_MAP, GHOST_COLORS } from './constants';
+import { INITIAL_MAP, GHOST_COLORS, FRUIT_SPAWN_POS, FRUIT_POINTS, FRUIT_DURATION, DOTS_TO_SPAWN_FRUIT, SPEED_MS } from './constants';
 import Grid from './components/Grid';
 import { soundManager } from './utils/audio';
 import { 
@@ -19,6 +19,17 @@ const App: React.FC = () => {
   const requestRef = useRef<number>(0);
   const lastTimeRef = useRef<number>(0);
   const [isMuted, setIsMuted] = useState(false);
+  const lastInputTimeRef = useRef<number>(0);
+
+  // High Score State
+  const [highScore, setHighScore] = useState<number>(() => {
+      try {
+          const saved = localStorage.getItem('pacman_highscore');
+          return saved ? parseInt(saved, 10) : 0;
+      } catch {
+          return 0;
+      }
+  });
 
   // Ref for state to access in event listeners/loops without stale closures
   const stateRef = useRef<GameState | null>(null);
@@ -55,7 +66,9 @@ const App: React.FC = () => {
       score: 0,
       lives: 3,
       status: 'IDLE',
-      powerModeTime: 0
+      powerModeTime: 0,
+      dotsEaten: 0,
+      fruitTimer: 0
     };
 
     setGameState(initialState);
@@ -65,6 +78,16 @@ const App: React.FC = () => {
   useEffect(() => {
     initGame();
   }, [initGame]);
+
+  // Handle High Score
+  useEffect(() => {
+      if (gameState && (gameState.status === 'GAME_OVER' || gameState.status === 'WON')) {
+          if (gameState.score > highScore) {
+              setHighScore(gameState.score);
+              localStorage.setItem('pacman_highscore', gameState.score.toString());
+          }
+      }
+  }, [gameState?.status, gameState?.score, highScore]);
 
   // --- Helpers ---
   function findPosition(map: number[][], type: TileType): Position | null {
@@ -119,7 +142,7 @@ const App: React.FC = () => {
       return;
     }
 
-    if (timestamp - lastTimeRef.current < 150) { // Approx 6-7 ticks per second
+    if (timestamp - lastTimeRef.current < SPEED_MS) {
       requestRef.current = requestAnimationFrame(updateGame);
       return;
     }
@@ -128,6 +151,13 @@ const App: React.FC = () => {
     const current = { ...stateRef.current };
 
     // 1. Move Pacman
+    // Input Expiry: If the next direction has been pending for too long without being valid, drop it.
+    if (current.pacman.direction !== current.pacman.nextDirection) {
+        if (Date.now() - lastInputTimeRef.current > 500) {
+            current.pacman.nextDirection = current.pacman.direction;
+        }
+    }
+
     // Try next direction first
     let nextPos = getNextPosition(current.pacman.x, current.pacman.y, current.pacman.nextDirection);
     if (isValidMove(current.map, nextPos.x, nextPos.y)) {
@@ -146,14 +176,27 @@ const App: React.FC = () => {
     const tileAtPacman = current.map[current.pacman.y][current.pacman.x];
     if (tileAtPacman === TileType.DOT) {
       current.score += 10;
+      current.dotsEaten += 1;
       current.map[current.pacman.y][current.pacman.x] = TileType.EMPTY;
       soundManager.playChomp();
+
+      // Spawn Fruit Logic
+      if (current.dotsEaten > 0 && current.dotsEaten % DOTS_TO_SPAWN_FRUIT === 0) {
+          current.map[FRUIT_SPAWN_POS.y][FRUIT_SPAWN_POS.x] = TileType.FRUIT;
+          current.fruitTimer = FRUIT_DURATION;
+      }
+
     } else if (tileAtPacman === TileType.POWER_PELLET) {
       current.score += 50;
       current.map[current.pacman.y][current.pacman.x] = TileType.EMPTY;
       current.powerModeTime = 50; // Ticks
       current.ghosts.forEach(g => g.isScared = true);
       soundManager.playPower();
+    } else if (tileAtPacman === TileType.FRUIT) {
+      current.score += FRUIT_POINTS;
+      current.map[current.pacman.y][current.pacman.x] = TileType.EMPTY;
+      current.fruitTimer = 0;
+      soundManager.playFruit();
     }
 
     // Power Mode Countdown
@@ -162,6 +205,17 @@ const App: React.FC = () => {
       if (current.powerModeTime === 0) {
         current.ghosts.forEach(g => g.isScared = false);
       }
+    }
+
+    // Fruit Timer Countdown
+    if (current.fruitTimer > 0) {
+        current.fruitTimer--;
+        if (current.fruitTimer === 0) {
+            // Remove fruit if present
+            if (current.map[FRUIT_SPAWN_POS.y][FRUIT_SPAWN_POS.x] === TileType.FRUIT) {
+                current.map[FRUIT_SPAWN_POS.y][FRUIT_SPAWN_POS.x] = TileType.EMPTY;
+            }
+        }
     }
 
     // 3. Move Ghosts
@@ -249,6 +303,7 @@ const App: React.FC = () => {
                 if (pStart) { current.pacman.x = pStart.x; current.pacman.y = pStart.y; }
                 current.pacman.direction = Direction.RIGHT;
                 current.pacman.nextDirection = Direction.RIGHT;
+                lastInputTimeRef.current = Date.now(); // Reset buffer
                 
                 // Reset ghosts
                 const gStarts = findAllPositions(INITIAL_MAP, TileType.GHOST_SPAWN);
@@ -258,8 +313,6 @@ const App: React.FC = () => {
                     g.y = s.y;
                     g.isScared = false;
                 });
-                
-                // Small pause could be added here, but for simplicity we just continue
             }
         }
     }
@@ -309,6 +362,7 @@ const App: React.FC = () => {
 
     if (newDir !== Direction.NONE) {
       stateRef.current.pacman.nextDirection = newDir;
+      lastInputTimeRef.current = Date.now();
     }
   }, [initGame]);
 
@@ -321,6 +375,7 @@ const App: React.FC = () => {
   const handleDirection = (dir: Direction) => {
       if (stateRef.current && stateRef.current.status === 'PLAYING') {
           stateRef.current.pacman.nextDirection = dir;
+          lastInputTimeRef.current = Date.now();
       }
   };
   
@@ -348,7 +403,7 @@ const App: React.FC = () => {
         <div>
             <h1 className="text-2xl text-yellow-400 drop-shadow-md mb-2">PAC-MAN</h1>
             <div className="flex items-center gap-4">
-                <div className="text-sm text-slate-400">HIGH SCORE: <span className="text-white">10000</span></div>
+                <div className="text-sm text-slate-400">HIGH SCORE: <span className="text-white">{highScore}</span></div>
             </div>
         </div>
         <div className="text-right">
@@ -387,7 +442,12 @@ const App: React.FC = () => {
                 {gameState.status === 'GAME_OVER' && (
                     <>
                         <div className="text-red-500 text-4xl mb-4">GAME OVER</div>
-                        <div className="text-white mb-8">SCORE: {gameState.score}</div>
+                        <div className="text-white mb-2">SCORE: {gameState.score}</div>
+                        {gameState.score >= highScore && gameState.score > 0 && (
+                             <div className="text-yellow-400 mb-6 text-sm animate-pulse">NEW HIGH SCORE!</div>
+                        )}
+                        {!((gameState.score >= highScore) && gameState.score > 0) && <div className="mb-8"></div>}
+                        
                         <button 
                             onClick={toggleGame}
                             className="px-6 py-3 bg-white text-red-600 hover:bg-gray-200 rounded-sm flex items-center gap-2"
@@ -399,7 +459,12 @@ const App: React.FC = () => {
                  {gameState.status === 'WON' && (
                     <>
                         <div className="text-green-400 text-4xl mb-4">YOU WIN!</div>
-                        <div className="text-white mb-8">PERFECT RUN</div>
+                        <div className="text-white mb-2">SCORE: {gameState.score}</div>
+                         {gameState.score >= highScore && gameState.score > 0 && (
+                             <div className="text-yellow-400 mb-6 text-sm animate-pulse">NEW HIGH SCORE!</div>
+                        )}
+                         {!((gameState.score >= highScore) && gameState.score > 0) && <div className="mb-8"></div>}
+
                         <button 
                             onClick={toggleGame}
                             className="px-6 py-3 bg-green-600 text-white hover:bg-green-500 rounded-sm"

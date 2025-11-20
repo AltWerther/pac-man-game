@@ -13,7 +13,8 @@ export enum TileType {
   POWER_PELLET = 3,
   PACMAN_SPAWN = 4,
   GHOST_SPAWN = 5,
-  DOOR = 6
+  DOOR = 6,
+  FRUIT = 7
 }
 
 export interface Position {
@@ -39,4 +40,6 @@ export interface GameState {
   lives: number;
   status: 'IDLE' | 'PLAYING' | 'GAME_OVER' | 'WON';
   powerModeTime: number;
+  dotsEaten: number;
+  fruitTimer: number;
 }
