@@ -1,0 +1,5 @@
+{
+  "name": "Retro Pac-Man",
+  "description": "Ein klassisches Pac-Man Spiel gebaut mit React, TypeScript und Tailwind CSS.",
+  "requestFramePermissions": []
+}
